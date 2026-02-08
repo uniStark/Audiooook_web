@@ -130,23 +130,22 @@ router.get('/browse', (req, res) => {
     ]);
     const ALWAYS_SKIP_DIRS = new Set(['node_modules']);
     try {
-      const items = fs.readdirSync(resolved, { withFileTypes: true });
-      for (const item of items) {
-        if (item.name.startsWith('.')) continue;
-        if (ALWAYS_SKIP_DIRS.has(item.name)) continue;
-        if (isRootDir && ROOT_SKIP_DIRS.has(item.name)) continue;
+      // 不使用 withFileTypes（NAS/NFS/CIFS 等网络文件系统上 d_type 可能不可靠）
+      const names = fs.readdirSync(resolved);
+      for (const name of names) {
+        if (name.startsWith('.')) continue;
+        if (ALWAYS_SKIP_DIRS.has(name)) continue;
+        if (isRootDir && ROOT_SKIP_DIRS.has(name)) continue;
 
-        // 某些系统下 isDirectory() 可能异常
+        const fullPath = path.join(resolved, name);
+
+        // 用 statSync 判断是否为目录（兼容所有文件系统）
         let isDir = false;
-        const fullPath = path.join(resolved, item.name);
         try {
-          isDir = item.isDirectory();
-          if (!isDir) {
-            // 对于符号链接等，fallback 到 statSync
-            const stat = fs.statSync(fullPath);
-            isDir = stat.isDirectory();
-          }
+          const stat = fs.statSync(fullPath);
+          isDir = stat.isDirectory();
         } catch {
+          // statSync 失败（断开的符号链接等），跳过
           continue;
         }
         if (!isDir) continue;
@@ -154,13 +153,13 @@ router.get('/browse', (req, res) => {
         // 检查是否有读取权限
         let readable = true;
         try {
-          fs.accessSync(fullPath, fs.constants.R_OK);
+          fs.accessSync(fullPath, fs.constants.R_OK | fs.constants.X_OK);
         } catch {
           readable = false;
         }
 
         entries.push({
-          name: item.name,
+          name,
           path: fullPath,
           readable,
         });
@@ -176,17 +175,8 @@ router.get('/browse', (req, res) => {
     const parentPath = path.dirname(resolved);
     const hasParent = parentPath !== resolved; // 根目录时 dirname === 自身
 
-    // 检查当前目录是否包含有声书（含音频文件的子目录）
-    let hasAudioContent = false;
-    try {
-      const items = fs.readdirSync(resolved, { withFileTypes: true });
-      for (const item of items) {
-        if (item.isDirectory() && !item.name.startsWith('.')) {
-          hasAudioContent = true;
-          break;
-        }
-      }
-    } catch { /* ignore */ }
+    // 检查当前目录是否包含有声书（有子目录即可能含有声书）
+    const hasAudioContent = entries.length > 0;
 
     // Windows 下列出可用盘符
     let drives = null;
