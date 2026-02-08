@@ -145,3 +145,7 @@ npm run dev
 - **后端**：Express.js + FFmpeg（音频转码）
 - **离线**：IndexedDB + Service Worker (PWA)
 - **部署**：Docker + Docker Compose
+
+## 作者
+
+**Adrian Stark**

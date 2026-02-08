@@ -25,6 +25,7 @@ const { CONFIG_FILE, METADATA_FILE } = require('./utils/paths');
 const booksRouter = require('./routes/books');
 const audioRouter = require('./routes/audio');
 const configRouter = require('./routes/config');
+const userRouter = require('./routes/user');
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -37,6 +38,7 @@ app.use(express.json());
 app.use('/api/books', booksRouter);
 app.use('/api/audio', audioRouter);
 app.use('/api/config', configRouter);
+app.use('/api/user', userRouter);
 
 // 生产环境：提供前端静态文件
 const clientDistPath = path.join(__dirname, '..', 'client', 'dist');

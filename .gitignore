@@ -14,3 +14,4 @@ docker-compose.override.yml
 # 运行时生成的配置文件（dev 环境在根目录）
 /config.json
 /metadata.json
+/user-data.json

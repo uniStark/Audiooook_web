@@ -75,8 +75,8 @@ audiooook_web/
 │   │   │   ├── bookStore.js    # Zustand: book list, favorites
 │   │   │   └── downloadStore.js # Zustand: download task management, progress tracking, cancel
 │   │   └── utils/
-│   │       ├── api.js          # Centralized API client (bookApi, configApi)
-│   │       ├── db.js           # IndexedDB operations (progress, favorites, audio cache, settings)
+│   │       ├── api.js          # Centralized API client (bookApi, configApi, userApi)
+│   │       ├── db.js           # IndexedDB operations + server sync (progress, favorites, audio cache, settings)
 │   │       └── format.js       # Formatting utilities (time, size, date)
 │   ├── vite.config.js          # Vite config: dev port 4001, proxy to backend 5001, PWA plugin
 │   └── package.json
@@ -85,7 +85,8 @@ audiooook_web/
 │   ├── routes/
 │   │   ├── books.js            # /api/books — list, detail, metadata CRUD, cover upload, new-book pre-transcode trigger
 │   │   ├── audio.js            # /api/audio — streaming, download, pre-transcode API, transcode status
-│   │   └── config.js           # /api/config — server settings, directory browser
+│   │   ├── config.js           # /api/config — server settings, directory browser
+│   │   └── user.js             # /api/user — server-side persistence for favorites, progress, user settings
 │   ├── services/
 │   │   ├── scanner.js          # Audiobook directory scanner, metadata CRUD, cover finder
 │   │   ├── transcoder.js       # Background transcoding queue, pre-transcode strategies
@@ -129,7 +130,8 @@ audiooook_web/
 - Resume from exact position when returning to a book
 - **Resume rewind**: When resuming, auto-rewind X seconds (configurable in Settings, default 3s, range 0–30s) to provide context
 - **Quick resume on bookshelf**: Books with progress show a play button on the BookCard — tap to resume directly without entering detail page
-- Stored client-side in IndexedDB (`playProgress` store)
+- **Dual persistence**: Stored in both IndexedDB (fast local cache) AND server-side `user-data.json` (survives redeployment / device change / browser data clear)
+- **Startup sync**: On app launch, client syncs with server using timestamp-based merge (newer wins); local-only data is pushed to server, server-only data is pulled to local
 
 ### 4.3 Skip Intro / Outro
 - **Per-book setting**: Each book can have independent skipIntro (seconds) and skipOutro (seconds)
@@ -161,7 +163,7 @@ audiooook_web/
 - **Search**: Filter books by name
 - **Sorting**: Three modes cycling via button — Recent (default, by last played), Name A→Z, Name Z→A. Sort preference persisted in IndexedDB settings
 - **Refresh**: Manual refresh button to re-scan audiobook directory
-- **Favorites**: Star/unstar books, stored in client-side IndexedDB
+- **Favorites**: Star/unstar books, stored in both IndexedDB AND server-side `user-data.json` (survives redeployment)
 
 ### 4.7 Offline Download & Caching
 - **Season download**: Download all episodes of a season for offline playback
@@ -221,6 +223,17 @@ audiooook_web/
 | PUT | `/api/config` | Update config (cacheSizeMB, audiobookPath, autoTranscode, autoTranscodeCount) |
 | GET | `/api/config/browse?path=xxx` | Browse server directories |
 
+### User Data (`/api/user`) — Server-side persistence
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/user/favorites` | Get all favorites |
+| PUT | `/api/user/favorites/:bookId` | Add/update a favorite |
+| DELETE | `/api/user/favorites/:bookId` | Remove a favorite |
+| GET | `/api/user/progress` | Get all playback progress |
+| PUT | `/api/user/progress/:bookId` | Save/update playback progress |
+| GET | `/api/user/settings` | Get user settings (resumeRewindSeconds, bookSortMode, etc.) |
+| PUT | `/api/user/settings` | Update user settings (incremental merge) |
+
 ---
 
 ## 6. Data Models
@@ -246,6 +259,23 @@ audiooook_web/
   "audiobookPath": "/audiobooks",
   "autoTranscode": true,
   "autoTranscodeCount": 5
+}
+```
+
+### server/data/user-data.json (NEW — server-side user data persistence)
+```json
+{
+  "favorites": {
+    "bookId1": { "bookId": "bookId1", "name": "...", "addedAt": 1700000000000 }
+  },
+  "progress": {
+    "bookId1": { "bookId": "bookId1", "seasonIndex": 0, "episodeIndex": 3, "currentTime": 1423.5, "updatedAt": 1700000000000 }
+  },
+  "settings": {
+    "resumeRewindSeconds": 3,
+    "bookSortMode": "recent",
+    "cacheLimitMB": 300
+  }
 }
 ```
 
@@ -284,11 +314,11 @@ audiooook_web/
 ### State Management
 - **playerStore** (Zustand): Singleton audio element, playback state, skip settings, progress saving.
 - **bookStore** (Zustand): Book list fetching, favorites management.
-- Both stores are client-side only; server is stateless except for filesystem + metadata.json + config.json.
+- **Data persistence strategy**: Client-side IndexedDB for fast access + server-side `user-data.json` for durability. Writes go to both; on startup, a sync merges both directions (timestamp-based, newer wins).
 
 ### Config File Location (via `server/utils/paths.js`)
-- **Dev** (`NODE_ENV != production`): `{project_root}/config.json` and `{project_root}/metadata.json`
-- **Production** (`NODE_ENV=production`): `{server}/data/config.json` and `{server}/data/metadata.json`
+- **Dev** (`NODE_ENV != production`): `{project_root}/config.json`, `{project_root}/metadata.json`, `{project_root}/user-data.json`
+- **Production** (`NODE_ENV=production`): `{server}/data/config.json`, `{server}/data/metadata.json`, `{server}/data/user-data.json`
 - **Transcode cache & covers**: Always in `{server}/data/` regardless of environment
 - In Docker, `./data` is bind-mounted to `/app/server/data`, making config files directly editable on host
 
@@ -392,5 +422,6 @@ These are areas the owner may want to extend:
 
 ---
 
+*Author: Adrian Stark*
 *Last updated: 2026-02-08*
-*Document version: 1.2*
+*Document version: 1.3*

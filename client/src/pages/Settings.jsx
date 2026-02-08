@@ -500,6 +500,11 @@ export default function Settings() {
             <p className="text-dark-500 text-xs mt-2">
               将有声书文件夹按照"小说名/季(章节)/集"的结构放入服务器指定目录即可自动识别
             </p>
+            <div className="pt-3 border-t border-dark-700/30 mt-3">
+              <p className="text-dark-500 text-xs">
+                Created by <span className="text-primary-500/80 font-medium">Adrian Stark</span>
+              </p>
+            </div>
           </div>
         </div>
       </div>

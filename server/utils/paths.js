@@ -33,6 +33,11 @@ const TRANSCODE_CACHE_DIR = path.join(SERVER_DATA_DIR, 'transcode-cache');
 // 封面目录（始终在 server/data 下）
 const COVERS_DIR = path.join(SERVER_DATA_DIR, 'covers');
 
+// 用户数据文件（收藏、播放进度、用户设置 — 服务端持久化）
+const USER_DATA_FILE = IS_PRODUCTION
+  ? path.join(SERVER_DATA_DIR, 'user-data.json')
+  : path.join(PROJECT_ROOT, 'user-data.json');
+
 // 确保必要目录存在
 function ensureDirs() {
   for (const dir of [SERVER_DATA_DIR, TRANSCODE_CACHE_DIR, COVERS_DIR]) {
@@ -52,4 +57,5 @@ module.exports = {
   METADATA_FILE,
   TRANSCODE_CACHE_DIR,
   COVERS_DIR,
+  USER_DATA_FILE,
 };

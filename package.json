@@ -2,6 +2,7 @@
   "name": "audiooook_web",
   "version": "1.0.0",
   "description": "在线听书Web应用 - 支持手机端的有声小说播放器",
+  "author": "Adrian Stark",
   "private": true,
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",

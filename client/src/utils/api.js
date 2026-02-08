@@ -66,6 +66,20 @@ export const bookApi = {
     request('/audio/transcode-status'),
 };
 
+// 用户数据API（服务端持久化：收藏、播放进度、用户设置）
+export const userApi = {
+  // 收藏
+  getFavorites: () => request('/user/favorites'),
+  addFavorite: (bookId, data) => request(`/user/favorites/${bookId}`, { method: 'PUT', body: JSON.stringify(data) }),
+  removeFavorite: (bookId) => request(`/user/favorites/${bookId}`, { method: 'DELETE' }),
+  // 播放进度
+  getAllProgress: () => request('/user/progress'),
+  saveProgress: (bookId, data) => request(`/user/progress/${bookId}`, { method: 'PUT', body: JSON.stringify(data) }),
+  // 用户设置
+  getSettings: () => request('/user/settings'),
+  saveSettings: (data) => request(`/user/settings`, { method: 'PUT', body: JSON.stringify(data) }),
+};
+
 // 配置相关API
 export const configApi = {
   getConfig: () => request('/config'),
