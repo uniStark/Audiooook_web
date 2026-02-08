@@ -8,10 +8,12 @@ import {
   HiOutlineFolder,
   HiChevronRight,
   HiArrowUturnLeft,
+  HiArrowPath,
   HiCheck,
   HiXMark,
 } from 'react-icons/hi2';
 import { configApi } from '../utils/api';
+import useBookStore from '../stores/bookStore';
 import { getCacheSize, getAllCachedAudio, removeCachedAudio, setSetting, getSetting } from '../utils/db';
 import { formatSize } from '../utils/format';
 
@@ -22,6 +24,8 @@ export default function Settings() {
   const [cacheLimitMB, setCacheLimitMB] = useState(300);
   const [clearing, setClearing] = useState(false);
   const [showBrowser, setShowBrowser] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const { fetchBooks } = useBookStore();
 
   useEffect(() => {
     loadConfig();
@@ -84,9 +88,21 @@ export default function Settings() {
       if (res.success) {
         setConfig(prev => ({ ...prev, audiobookPath: newPath }));
         setShowBrowser(false);
+        // 自动刷新书架
+        await fetchBooks();
       }
     } catch (e) {
       console.error('Failed to update path:', e);
+    }
+  };
+
+  const handleRefreshBooks = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await fetchBooks();
+    } finally {
+      setTimeout(() => setRefreshing(false), 600);
     }
   };
 
@@ -105,9 +121,19 @@ export default function Settings() {
       <div className="space-y-4">
         {/* 服务器信息 */}
         <div className="glass-card p-4">
-          <div className="flex items-center gap-3 mb-3">
-            <HiOutlineServerStack className="w-5 h-5 text-primary-500" />
-            <h2 className="font-semibold">服务器</h2>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-3">
+              <HiOutlineServerStack className="w-5 h-5 text-primary-500" />
+              <h2 className="font-semibold">服务器</h2>
+            </div>
+            <button
+              onClick={handleRefreshBooks}
+              disabled={refreshing}
+              className="flex items-center gap-1.5 text-xs text-primary-500 hover:text-primary-400 bg-primary-500/10 hover:bg-primary-500/20 px-3 py-1.5 rounded-lg transition-all active:scale-95 disabled:opacity-50"
+            >
+              <HiArrowPath className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+              {refreshing ? '刷新中' : '刷新书库'}
+            </button>
           </div>
           {config ? (
             <div className="space-y-3 text-sm">

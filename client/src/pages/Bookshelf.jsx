@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { HiMagnifyingGlass, HiXMark } from 'react-icons/hi2';
+import { HiMagnifyingGlass, HiXMark, HiArrowPath } from 'react-icons/hi2';
 import useBookStore from '../stores/bookStore';
 import usePlayerStore from '../stores/playerStore';
 import BookCard from '../components/BookCard';
@@ -53,12 +53,21 @@ export default function Bookshelf() {
             共 {books.length} 本有声书
           </p>
         </div>
-        <button
-          onClick={() => setShowSearch(!showSearch)}
-          className="btn-ghost"
-        >
-          {showSearch ? <HiXMark className="w-6 h-6" /> : <HiMagnifyingGlass className="w-6 h-6" />}
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => { fetchBooks(); loadProgress(); }}
+            className="btn-ghost"
+            title="刷新书库"
+          >
+            <HiArrowPath className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            onClick={() => setShowSearch(!showSearch)}
+            className="btn-ghost"
+          >
+            {showSearch ? <HiXMark className="w-6 h-6" /> : <HiMagnifyingGlass className="w-6 h-6" />}
+          </button>
+        </div>
       </div>
 
       {/* 搜索栏 */}
