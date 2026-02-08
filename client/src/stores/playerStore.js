@@ -4,7 +4,7 @@
  */
 import { create } from 'zustand';
 import { bookApi } from '../utils/api';
-import { savePlayProgress, getPlayProgress, getCachedAudio } from '../utils/db';
+import { savePlayProgress, getPlayProgress, getCachedAudio, getSetting } from '../utils/db';
 
 // 全局 Audio 实例
 let audioElement = null;
@@ -193,15 +193,17 @@ const usePlayerStore = create((set, get) => ({
     }
   },
 
-  // 从上次进度恢复播放
+  // 从上次进度恢复播放（自动回退 N 秒）
   resumeBook: async (book) => {
     const progress = await getPlayProgress(book.id);
     if (progress) {
+      const rewindSec = await getSetting('resumeRewindSeconds', 3);
+      const seekTime = Math.max(0, (progress.currentTime || 0) - rewindSec);
       await get().playEpisode(
         book,
         progress.seasonIndex || 0,
         progress.episodeIndex || 0,
-        progress.currentTime || 0
+        seekTime
       );
     } else {
       await get().playEpisode(book, 0, 0);

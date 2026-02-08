@@ -1,22 +1,43 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { HiMagnifyingGlass, HiXMark, HiArrowPath } from 'react-icons/hi2';
+import { HiMagnifyingGlass, HiXMark, HiArrowPath, HiBarsArrowDown, HiBarsArrowUp } from 'react-icons/hi2';
 import useBookStore from '../stores/bookStore';
 import usePlayerStore from '../stores/playerStore';
 import BookCard from '../components/BookCard';
-import { getAllPlayProgress } from '../utils/db';
+import { getAllPlayProgress, getSetting, setSetting } from '../utils/db';
+
+// 排序模式：recent(最近播放), nameAsc(名称正序), nameDesc(名称倒序)
+const SORT_MODES = [
+  { key: 'recent', label: '最近播放' },
+  { key: 'nameAsc', label: '名称 A→Z' },
+  { key: 'nameDesc', label: '名称 Z→A' },
+];
 
 export default function Bookshelf() {
   const { books, isLoading, error, searchQuery, setSearchQuery, fetchBooks, getFilteredBooks } = useBookStore();
   const { initPlayer } = usePlayerStore();
   const [progressMap, setProgressMap] = useState({});
   const [showSearch, setShowSearch] = useState(false);
+  const [sortMode, setSortMode] = useState('recent');
 
   useEffect(() => {
     initPlayer();
     fetchBooks();
     loadProgress();
+    loadSortMode();
   }, []);
+
+  const loadSortMode = async () => {
+    const mode = await getSetting('bookSortMode', 'recent');
+    setSortMode(mode);
+  };
+
+  const cycleSortMode = async () => {
+    const idx = SORT_MODES.findIndex(m => m.key === sortMode);
+    const next = SORT_MODES[(idx + 1) % SORT_MODES.length];
+    setSortMode(next.key);
+    await setSetting('bookSortMode', next.key);
+  };
 
   const loadProgress = async () => {
     const allProgress = await getAllPlayProgress();
@@ -29,8 +50,15 @@ export default function Bookshelf() {
 
   const filteredBooks = getFilteredBooks();
 
-  // 按最近播放排序：有进度的排在前面
+  // 排序
   const sortedBooks = [...filteredBooks].sort((a, b) => {
+    if (sortMode === 'nameAsc') {
+      return a.name.localeCompare(b.name, 'zh-CN');
+    }
+    if (sortMode === 'nameDesc') {
+      return b.name.localeCompare(a.name, 'zh-CN');
+    }
+    // 默认：最近播放排在前面
     const pa = progressMap[a.id];
     const pb = progressMap[b.id];
     if (pa && pb) return (pb.updatedAt || 0) - (pa.updatedAt || 0);
@@ -51,9 +79,23 @@ export default function Bookshelf() {
           <h1 className="text-2xl font-bold text-white">书架</h1>
           <p className="text-sm text-dark-400 mt-1">
             共 {books.length} 本有声书
+            <span className="text-dark-500 ml-2 text-xs">
+              · {SORT_MODES.find(m => m.key === sortMode)?.label}
+            </span>
           </p>
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={cycleSortMode}
+            className="btn-ghost relative"
+            title={`排序: ${SORT_MODES.find(m => m.key === sortMode)?.label}`}
+          >
+            {sortMode === 'nameDesc' ? (
+              <HiBarsArrowUp className="w-5 h-5" />
+            ) : (
+              <HiBarsArrowDown className="w-5 h-5" />
+            )}
+          </button>
           <button
             onClick={() => { fetchBooks(); loadProgress(); }}
             className="btn-ghost"

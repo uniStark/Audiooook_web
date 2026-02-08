@@ -11,6 +11,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { spawn } = require('child_process');
 const { needsTranscode } = require('../utils/parser');
 
@@ -25,6 +26,69 @@ const transcodingInProgress = new Map();
 const transcodeQueue = [];
 let activeWorkers = 0;        // 当前正在运行的转码 worker 数
 const MAX_CONCURRENCY = 10;   // 最大并发数硬上限
+let cancelRequested = false;  // 取消标志：完成当前任务后停止
+const SYSTEM_LOAD_LIMIT = 0.85; // 系统负载上限 85%
+
+// ========== 系统性能监控 ==========
+
+// 上一次 CPU 快照（用于计算 CPU 使用率）
+let lastCpuSnapshot = null;
+
+/**
+ * 获取当前 CPU 使用率快照
+ */
+function getCpuSnapshot() {
+  const cpus = os.cpus();
+  let totalIdle = 0, totalTick = 0;
+  for (const cpu of cpus) {
+    for (const type in cpu.times) {
+      totalTick += cpu.times[type];
+    }
+    totalIdle += cpu.times.idle;
+  }
+  return { idle: totalIdle, total: totalTick };
+}
+
+/**
+ * 计算两次快照之间的 CPU 使用率 (0.0 ~ 1.0)
+ */
+function getCpuUsage() {
+  const current = getCpuSnapshot();
+  if (!lastCpuSnapshot) {
+    lastCpuSnapshot = current;
+    // 首次调用用 loadavg 估算
+    const loadAvg1m = os.loadavg()[0];
+    const cpuCount = os.cpus().length;
+    return Math.min(1, loadAvg1m / cpuCount);
+  }
+  const idleDiff = current.idle - lastCpuSnapshot.idle;
+  const totalDiff = current.total - lastCpuSnapshot.total;
+  lastCpuSnapshot = current;
+  if (totalDiff === 0) return 0;
+  return 1 - (idleDiff / totalDiff);
+}
+
+/**
+ * 获取内存使用率 (0.0 ~ 1.0)
+ */
+function getMemUsage() {
+  const total = os.totalmem();
+  const free = os.freemem();
+  return (total - free) / total;
+}
+
+/**
+ * 检查系统是否过载（CPU 或内存超过 85%）
+ */
+function isSystemOverloaded() {
+  const cpuUsage = getCpuUsage();
+  const memUsage = getMemUsage();
+  const overloaded = cpuUsage > SYSTEM_LOAD_LIMIT || memUsage > SYSTEM_LOAD_LIMIT;
+  if (overloaded) {
+    console.log(`[Transcode] 系统负载过高，暂停调度 (CPU: ${(cpuUsage * 100).toFixed(1)}%, MEM: ${(memUsage * 100).toFixed(1)}%, 上限: ${SYSTEM_LOAD_LIMIT * 100}%)`);
+  }
+  return overloaded;
+}
 
 // ========== 配置 ==========
 
@@ -133,11 +197,48 @@ async function ensureTranscoded(filePath, bookId, seasonId, episodeId) {
 // ========== 后台并发队列 ==========
 
 /**
+ * 等待指定毫秒
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
  * 启动一个 worker：从队列取任务执行，执行完再取下一个，直到队列空
+ * 每次取任务前检查：1) 取消标志  2) 配置是否还开启  3) 系统负载是否过高
  */
 async function startWorker() {
   activeWorkers++;
   while (transcodeQueue.length > 0) {
+    // 检查取消标志
+    if (cancelRequested) {
+      console.log('[Transcode] Worker 收到取消信号，停止处理队列');
+      break;
+    }
+    // 检查配置是否仍开启
+    const config = getTranscodeConfig();
+    if (!config.autoTranscode) {
+      console.log('[Transcode] 自动转码已关闭，停止后台队列');
+      cancelRequested = true;
+      break;
+    }
+    // 检查系统负载是否过高，过载时等待后重试
+    if (isSystemOverloaded()) {
+      // 等待 10 秒后重新检查
+      await sleep(10000);
+      // 重新检查，如果连续过载超过 3 次，当前 worker 退出
+      let retries = 0;
+      while (isSystemOverloaded() && retries < 3) {
+        retries++;
+        console.log(`[Transcode] 系统仍然过载，等待中... (${retries}/3)`);
+        await sleep(15000);
+      }
+      if (retries >= 3) {
+        console.log('[Transcode] 系统持续过载，Worker 暂时退出，剩余任务保留在队列中');
+        break;
+      }
+    }
+
     const task = transcodeQueue.shift();
     try {
       await ensureTranscoded(task.filePath, task.bookId, task.seasonId, task.episodeId);
@@ -147,20 +248,41 @@ async function startWorker() {
   }
   activeWorkers--;
   if (activeWorkers === 0) {
-    console.log('[Transcode] 后台转码队列已全部完成');
+    if (cancelRequested) {
+      // 清空队列中剩余任务
+      transcodeQueue.length = 0;
+      cancelRequested = false;
+      console.log('[Transcode] 后台转码队列已取消，剩余任务已清空');
+    } else if (transcodeQueue.length === 0) {
+      console.log('[Transcode] 后台转码队列已全部完成');
+    }
+    // 如果队列还有任务（因过载退出的 worker），后续入队时会重新调度
   }
 }
 
 /**
  * 根据待处理任务数自动调整并发 worker 数
  * 规则：并发数 = min(新增任务数, 队列总长度, MAX_CONCURRENCY) - 已有worker数
+ * 额外限制：如果系统已过载，不启动新 worker
  */
 function scheduleWorkers(newTaskCount) {
-  // 期望的并发数 = 实际需要处理的任务量，但不超过上限
-  const desired = Math.min(newTaskCount, transcodeQueue.length, MAX_CONCURRENCY);
+  // 系统过载时仅确保至少有 1 个 worker（worker 内部会自行等待负载下降）
+  if (isSystemOverloaded()) {
+    if (activeWorkers === 0 && transcodeQueue.length > 0) {
+      console.log('[Transcode] 系统负载较高，仅启动 1 个 worker（将等待负载下降后执行）');
+      startWorker();
+    }
+    return;
+  }
+
+  // 根据 CPU 核数动态限制并发（CPU 核数 / 2，但至少 1，最多 MAX_CONCURRENCY）
+  const cpuCores = os.cpus().length;
+  const dynamicMax = Math.max(1, Math.min(Math.floor(cpuCores / 2), MAX_CONCURRENCY));
+
+  const desired = Math.min(newTaskCount, transcodeQueue.length, dynamicMax);
   const toSpawn = Math.max(0, desired - activeWorkers);
   if (toSpawn > 0) {
-    console.log(`[Transcode] 启动 ${toSpawn} 个并发转码 worker (当前活跃: ${activeWorkers}, 队列: ${transcodeQueue.length})`);
+    console.log(`[Transcode] 启动 ${toSpawn} 个并发转码 worker (活跃: ${activeWorkers}, 队列: ${transcodeQueue.length}, CPU核数: ${cpuCores}, 动态上限: ${dynamicMax})`);
     for (let i = 0; i < toSpawn; i++) {
       startWorker(); // fire-and-forget，不 await
     }
@@ -170,9 +292,15 @@ function scheduleWorkers(newTaskCount) {
 /**
  * 向后台队列中添加转码任务（去重、跳过已完成）
  * 自动根据任务数量启动对应数量的并发 worker
+ * @param {Array} tasks - 转码任务列表
+ * @param {boolean} priority - 是否高优先级（插入队头），默认 false
  */
-function enqueueTranscode(tasks) {
+function enqueueTranscode(tasks, priority = false) {
+  // 入队前重置取消标志（用户可能重新开启了转码）
+  cancelRequested = false;
+
   let added = 0;
+  const toAdd = [];
   for (const task of tasks) {
     // 已转码完成，跳过
     if (isTranscoded(task.bookId, task.seasonId, task.episodeId)) continue;
@@ -184,20 +312,41 @@ function enqueueTranscode(tasks) {
       t.bookId === task.bookId && t.seasonId === task.seasonId && t.episodeId === task.episodeId
     )) continue;
 
-    transcodeQueue.push(task);
+    toAdd.push(task);
     added++;
   }
 
   if (added > 0) {
+    if (priority) {
+      // 高优先级：插入队头
+      transcodeQueue.unshift(...toAdd);
+      console.log(`[Transcode] 高优先级入队 ${added} 个任务 (插入队头)`);
+    } else {
+      transcodeQueue.push(...toAdd);
+    }
     scheduleWorkers(added);
   }
   return added;
 }
 
+/**
+ * 取消后台转码队列（完成当前正在执行的任务后停止）
+ */
+function cancelQueue() {
+  if (transcodeQueue.length === 0 && activeWorkers === 0) {
+    return { cancelled: 0, message: '没有正在进行的转码任务' };
+  }
+  const remaining = transcodeQueue.length;
+  cancelRequested = true;
+  console.log(`[Transcode] 收到取消请求，队列中 ${remaining} 个任务将在当前任务完成后清空`);
+  return { cancelled: remaining, inProgress: activeWorkers, message: `将在 ${activeWorkers} 个当前任务完成后停止` };
+}
+
 // ========== 预转码策略 ==========
 
 /**
- * 新书预转码：转码第一季/第一章的前 N 集中需要转码的
+ * 新书预转码：以整本小说为单位，跨季收集前 N 集中需要转码的
+ * 从第一季第一集开始，按顺序跨季收集，直到收集够 N 集
  * @param {object} book - 完整的 book 对象（含 seasons[].episodes[]）
  */
 function preTranscodeBook(book) {
@@ -208,24 +357,27 @@ function preTranscodeBook(book) {
 
   const count = config.autoTranscodeCount;
   const tasks = [];
-  const firstSeason = book.seasons[0];
+  let collected = 0;
 
-  // 取第一季的前 N 集
-  const limit = Math.min(count, firstSeason.episodes.length);
-  for (let i = 0; i < limit; i++) {
-    const ep = firstSeason.episodes[i];
-    if (ep.needsTranscode) {
-      tasks.push({
-        filePath: ep.filePath,
-        bookId: book.id,
-        seasonId: firstSeason.id,
-        episodeId: ep.id,
-      });
+  // 从第一季第一集开始，跨季顺序收集前 N 集
+  for (let sIdx = 0; sIdx < book.seasons.length && collected < count; sIdx++) {
+    const season = book.seasons[sIdx];
+    for (let eIdx = 0; eIdx < season.episodes.length && collected < count; eIdx++) {
+      const ep = season.episodes[eIdx];
+      if (ep.needsTranscode) {
+        tasks.push({
+          filePath: ep.filePath,
+          bookId: book.id,
+          seasonId: season.id,
+          episodeId: ep.id,
+        });
+      }
+      collected++;
     }
   }
 
   if (tasks.length > 0) {
-    console.log(`[Transcode] 新书预转码: "${book.name}" 第一季前 ${limit} 集 (${tasks.length} 集需转码)`);
+    console.log(`[Transcode] 新书预转码: "${book.name}" 前 ${collected} 集 (${tasks.length} 集需转码)`);
     enqueueTranscode(tasks);
   }
 }
@@ -271,7 +423,8 @@ function preTranscodeFromPosition(book, seasonIndex, episodeIndex) {
 
   if (tasks.length > 0) {
     console.log(`[Transcode] 播放预转码: "${book.name}" 接下来 ${count} 集 (${tasks.length} 集需转码)`);
-    enqueueTranscode(tasks);
+    // 播放触发的预转码使用高优先级（插入队头），让用户尽快听到
+    enqueueTranscode(tasks, true);
   }
 }
 
@@ -279,11 +432,21 @@ function preTranscodeFromPosition(book, seasonIndex, episodeIndex) {
  * 获取转码状态（供 API 查询）
  */
 function getTranscodeStatus() {
+  const cpuUsage = getCpuUsage();
+  const memUsage = getMemUsage();
   return {
     queueLength: transcodeQueue.length,
     activeWorkers,
     maxConcurrency: MAX_CONCURRENCY,
     inProgress: transcodingInProgress.size,
+    systemLoad: {
+      cpuPercent: +(cpuUsage * 100).toFixed(1),
+      memPercent: +(memUsage * 100).toFixed(1),
+      limit: SYSTEM_LOAD_LIMIT * 100,
+      cpuCores: os.cpus().length,
+      totalMemMB: Math.round(os.totalmem() / 1024 / 1024),
+      freeMemMB: Math.round(os.freemem() / 1024 / 1024),
+    },
     queueItems: transcodeQueue.slice(0, 10).map(t => ({
       bookId: t.bookId,
       seasonId: t.seasonId,
@@ -300,5 +463,6 @@ module.exports = {
   preTranscodeFromPosition,
   getTranscodeStatus,
   getTranscodeConfig,
+  cancelQueue,
   TRANSCODE_CACHE_DIR,
 };

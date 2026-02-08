@@ -9,8 +9,9 @@ import {
 import { bookApi } from '../utils/api';
 import usePlayerStore from '../stores/playerStore';
 import useBookStore from '../stores/bookStore';
+import useDownloadStore from '../stores/downloadStore';
 import EpisodeList from '../components/EpisodeList';
-import { getPlayProgress, cacheAudio } from '../utils/db';
+import { getPlayProgress } from '../utils/db';
 import { formatTime } from '../utils/format';
 
 export default function BookDetail() {
@@ -26,8 +27,7 @@ export default function BookDetail() {
   const [expandedSeason, setExpandedSeason] = useState(0);
   const [showMetaEdit, setShowMetaEdit] = useState(false);
   const [metaForm, setMetaForm] = useState({});
-  const [downloading, setDownloading] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState('');
+  const { isDownloading, tasks: downloadTasks, completedCount, totalCount, downloadSeason, cancelDownload } = useDownloadStore();
   const [uploading, setUploading] = useState(false);
   const coverInputRef = useRef(null);
   const [coverKey, setCoverKey] = useState(0); // 用于强制刷新封面图片
@@ -136,34 +136,8 @@ export default function BookDetail() {
 
   // 批量下载整季
   const handleDownloadSeason = async (season, seasonIndex) => {
-    if (downloading) return;
-    setDownloading(true);
-    
-    try {
-      for (let i = 0; i < season.episodes.length; i++) {
-        const ep = season.episodes[i];
-        setDownloadProgress(`正在下载 ${i + 1}/${season.episodes.length}`);
-        
-        try {
-          const url = bookApi.getDownloadUrl(book.id, season.id, ep.id);
-          const response = await fetch(url);
-          const blob = await response.blob();
-          
-          const key = `${book.id}_${season.id}_${ep.id}`;
-          await cacheAudio(key, book.id, blob, {
-            episodeName: ep.name,
-            seasonName: season.name,
-            bookName: book.name,
-          });
-        } catch (e) {
-          console.error(`Failed to download ${ep.name}:`, e);
-        }
-      }
-      setDownloadProgress('下载完成！');
-      setTimeout(() => setDownloadProgress(''), 2000);
-    } finally {
-      setDownloading(false);
-    }
+    if (isDownloading) return;
+    await downloadSeason(book, season, seasonIndex);
   };
 
   if (loading) {
@@ -354,9 +328,48 @@ export default function BookDetail() {
       )}
 
       {/* 下载进度 */}
-      {downloadProgress && (
-        <div className="glass-card p-3 mb-4 text-center text-sm text-primary-500">
-          {downloadProgress}
+      {downloadTasks.length > 0 && (
+        <div className="glass-card p-3 mb-4">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-dark-300">
+              {isDownloading
+                ? `正在下载 ${completedCount + 1}/${totalCount}`
+                : `下载完成 ${completedCount}/${totalCount}`}
+            </span>
+            {isDownloading && (
+              <button
+                onClick={cancelDownload}
+                className="text-xs text-red-400 hover:text-red-300 bg-red-500/10 px-2 py-1 rounded-lg transition-colors"
+              >
+                取消下载
+              </button>
+            )}
+          </div>
+          {/* 总进度条 */}
+          <div className="h-1.5 bg-dark-700 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-primary-500 rounded-full transition-all duration-300"
+              style={{ width: `${totalCount > 0 ? (completedCount / totalCount) * 100 : 0}%` }}
+            />
+          </div>
+          {/* 当前下载文件 */}
+          {isDownloading && (() => {
+            const current = downloadTasks.find(t => t.status === 'downloading');
+            return current ? (
+              <div className="mt-2">
+                <div className="flex justify-between text-[10px] text-dark-500 mb-0.5">
+                  <span className="truncate flex-1">{current.episodeName}</span>
+                  <span className="ml-2 flex-shrink-0">{current.progress}%</span>
+                </div>
+                <div className="h-1 bg-dark-700 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-primary-400 rounded-full transition-all duration-150"
+                    style={{ width: `${current.progress}%` }}
+                  />
+                </div>
+              </div>
+            ) : null;
+          })()}
         </div>
       )}
 
@@ -379,8 +392,8 @@ export default function BookDetail() {
                     e.stopPropagation();
                     handleDownloadSeason(season, sIndex);
                   }}
-                  disabled={downloading}
-                  className="text-dark-400 hover:text-primary-500 p-1"
+                  disabled={isDownloading}
+                  className="text-dark-400 hover:text-primary-500 p-1 disabled:opacity-30"
                   title="下载整季"
                 >
                   <HiArrowDownTray className="w-4 h-4" />

@@ -8,6 +8,7 @@ const {
   ensureTranscoded,
   preTranscodeFromPosition,
   getTranscodeStatus,
+  cancelQueue,
 } = require('../services/transcoder');
 
 /**
@@ -61,6 +62,15 @@ router.post('/pretranscode', (req, res) => {
  */
 router.get('/transcode-status', (req, res) => {
   res.json({ success: true, data: getTranscodeStatus() });
+});
+
+/**
+ * POST /api/audio/transcode-cancel
+ * 取消后台转码队列（完成当前任务后停止）
+ */
+router.post('/transcode-cancel', (req, res) => {
+  const result = cancelQueue();
+  res.json({ success: true, data: result });
 });
 
 /**

@@ -1,10 +1,19 @@
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import { HiPlay } from 'react-icons/hi2';
 import { bookApi } from '../utils/api';
 import { formatTime, formatDate } from '../utils/format';
+import usePlayerStore from '../stores/playerStore';
 
 export default function BookCard({ book, progress, index = 0 }) {
   const navigate = useNavigate();
+  const { resumeBook } = usePlayerStore();
+
+  const handleResume = async (e) => {
+    e.stopPropagation();
+    await resumeBook(book);
+    navigate('/player');
+  };
 
   return (
     <motion.div
@@ -49,11 +58,23 @@ export default function BookCard({ book, progress, index = 0 }) {
         )}
       </div>
       
-      {/* 箭头 */}
-      <div className="flex items-center text-dark-500">
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-        </svg>
+      {/* 继续播放按钮 / 箭头 */}
+      <div className="flex items-center">
+        {progress ? (
+          <button
+            onClick={handleResume}
+            className="w-9 h-9 rounded-full bg-primary-500 hover:bg-primary-600 flex items-center justify-center text-dark-900 active:scale-90 transition-all shadow-lg shadow-primary-500/20"
+            title="继续播放"
+          >
+            <HiPlay className="w-5 h-5 ml-0.5" />
+          </button>
+        ) : (
+          <div className="text-dark-500">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </div>
+        )}
       </div>
     </motion.div>
   );

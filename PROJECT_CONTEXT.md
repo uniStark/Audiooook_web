@@ -72,7 +72,8 @@ audiooook_web/
 │   │   │   └── Settings.jsx    # Server config, cache management, auto-transcode settings, dir browser
 │   │   ├── stores/
 │   │   │   ├── playerStore.js  # Zustand: audio playback state, skip intro/outro, progress, pre-transcode trigger
-│   │   │   └── bookStore.js    # Zustand: book list, favorites
+│   │   │   ├── bookStore.js    # Zustand: book list, favorites
+│   │   │   └── downloadStore.js # Zustand: download task management, progress tracking, cancel
 │   │   └── utils/
 │   │       ├── api.js          # Centralized API client (bookApi, configApi)
 │   │       ├── db.js           # IndexedDB operations (progress, favorites, audio cache, settings)
@@ -110,12 +111,14 @@ audiooook_web/
 - **Server-side transcoding**: WMA, APE, ALAC, FLAC → MP3 (128kbps, 44.1kHz, stereo) via FFmpeg
 - **Transcode caching**: Transcoded files are cached in `server/data/transcode-cache/` to avoid re-transcoding
 - **Background auto-transcoding**:
-  - When a new book is first detected, auto-transcode the first N episodes (default 5) of the first season/chapter
-  - When a user plays any episode, auto-transcode the next N episodes from that position (across season boundaries)
+  - When a new book is first detected, auto-transcode the first N episodes **across all seasons** (per-book, not per-season). E.g., if N=5 and season 1 has 3 episodes, it takes all 3 from S1 + first 2 from S2
+  - When a user plays any episode, auto-transcode the next N episodes from that position (across season boundaries) — **high priority** (inserted at queue front)
   - N is user-configurable in Settings (range: 1–20, default: 5)
   - User can toggle auto-transcode on/off in Settings
-  - Queue processes one file at a time to avoid server overload
+  - **Cancellation**: When user disables auto-transcode, the current task finishes and the remaining queue is cleared (no more new tasks start)
+  - **Performance safeguard**: System load (CPU & memory) is monitored. Concurrency is dynamically limited to `cpuCores / 2` (min 1, max 10). If CPU or memory exceeds **85%**, workers pause and wait for load to drop. After 3 consecutive overload checks (~45s), the worker exits and tasks remain queued for later
   - De-duplication: already-cached or in-progress files are skipped
+  - **Priority queue**: Playback-triggered pre-transcodes are inserted at the front (high priority), while new-book pre-transcodes go to the back
 - **Streaming**: Supports HTTP Range requests for seeking/progress bar dragging
 - **Controls**: Play/pause, previous/next episode, fast-forward/rewind 15s, seekable progress bar
 - **Media Session API**: Lock-screen controls on mobile
@@ -124,6 +127,8 @@ audiooook_web/
 - Exact position saved: book ID + season index + episode index + current time (seconds)
 - Auto-save every 10 seconds during playback
 - Resume from exact position when returning to a book
+- **Resume rewind**: When resuming, auto-rewind X seconds (configurable in Settings, default 3s, range 0–30s) to provide context
+- **Quick resume on bookshelf**: Books with progress show a play button on the BookCard — tap to resume directly without entering detail page
 - Stored client-side in IndexedDB (`playProgress` store)
 
 ### 4.3 Skip Intro / Outro
@@ -152,13 +157,18 @@ audiooook_web/
 - All metadata stored in `server/data/metadata.json`
 
 ### 4.6 Bookshelf & Favorites
-- **Bookshelf**: Grid view of all detected audiobooks with covers, names, episode counts
+- **Bookshelf**: List view of all detected audiobooks with covers, names, episode counts
 - **Search**: Filter books by name
+- **Sorting**: Three modes cycling via button — Recent (default, by last played), Name A→Z, Name Z→A. Sort preference persisted in IndexedDB settings
 - **Refresh**: Manual refresh button to re-scan audiobook directory
 - **Favorites**: Star/unstar books, stored in client-side IndexedDB
 
 ### 4.7 Offline Download & Caching
 - **Season download**: Download all episodes of a season for offline playback
+- **Download progress**: Real-time progress tracking per file (percentage) and overall progress (completed/total), using ReadableStream for byte-level progress
+- **Cancel download**: Active downloads can be cancelled mid-flight via AbortController; remaining tasks are marked as cancelled
+- **Download manager store** (`downloadStore.js`): Centralized Zustand store tracking all download tasks, statuses, and progress
+- **Settings download panel**: Shows active download progress with cancel button; also shows all downloaded content grouped by book with per-episode delete and per-book bulk delete
 - **IndexedDB storage**: Audio blobs stored in `audioCache` object store
 - **Cache management**: User-configurable cache size limit (50MB–5GB, default 300MB)
 - **Auto-cleanup**: Old cache entries removed when limit exceeded (LRU)
@@ -202,6 +212,7 @@ audiooook_web/
 | GET | `/api/audio/download/:bookId/:seasonId/:episodeId` | Download audio file |
 | POST | `/api/audio/pretranscode` | Trigger background pre-transcode (body: {bookId, seasonIndex, episodeIndex}) |
 | GET | `/api/audio/transcode-status` | Get transcoding queue status |
+| POST | `/api/audio/transcode-cancel` | Cancel background transcode queue (finish current, clear rest) |
 
 ### Config (`/api/config`)
 | Method | Path | Description |
@@ -263,9 +274,11 @@ audiooook_web/
 ### Transcoding Architecture
 - **On-demand** (audio.js): When a user requests a WMA/FLAC/APE/ALAC file, `ensureTranscoded()` checks cache → transcodes if needed → serves cached MP3.
 - **Pre-emptive** (transcoder.js): Background queue transcodes upcoming episodes before user reaches them.
-  - Trigger 1: New book detected → first season's first N episodes
-  - Trigger 2: User plays episode → next N episodes from current position
-- **Queue**: Multi-threaded concurrent queue. Concurrency auto-scales: N tasks spawn N workers (up to hard cap of 10). Workers pull from a shared FIFO queue until empty.
+  - Trigger 1: New book detected → first N episodes **across all seasons** (per-book unit, not per-season)
+  - Trigger 2: User plays episode → next N episodes from current position (high priority, queue front)
+- **Queue**: Multi-threaded concurrent queue. Workers pull from a shared FIFO queue until empty.
+- **Dynamic concurrency**: `min(cpuCores / 2, MAX_CONCURRENCY=10)`. Adjusts based on actual CPU core count.
+- **Performance safeguard**: Workers check CPU and memory usage (via `os` module) before each task. If either exceeds **85%**, the worker pauses (up to ~45s with retries). If overload persists, worker exits; tasks remain queued for later.
 - **Cache key**: `${bookId}_${seasonId}_${episodeId}.mp3` in `server/data/transcode-cache/`
 
 ### State Management
@@ -348,6 +361,10 @@ npm run dev
 - `deploy.sh` and `update.sh` use `#!/bin/sh` (POSIX), NOT `#!/bin/bash`.
 - No bashisms: use `printf` instead of `echo -e`, `>/dev/null 2>&1` instead of `&>/dev/null`, no `local` keyword.
 
+### Logging
+- All `console.log/error/warn` calls are patched in `server/index.js` to include a `[YYYY/MM/DD HH:MM:SS]` timestamp prefix (timezone: `TZ` env var or `Asia/Shanghai`).
+- This ensures Docker logs always show precise timestamps for debugging.
+
 ### Browser Audio Limitations
 - Browsers cannot natively play WMA, APE, ALAC, FLAC.
 - These formats MUST be transcoded to MP3 on the server side.
@@ -376,4 +393,4 @@ These are areas the owner may want to extend:
 ---
 
 *Last updated: 2026-02-08*
-*Document version: 1.0*
+*Document version: 1.2*

@@ -56,6 +56,14 @@ export const bookApi = {
       method: 'POST',
       body: JSON.stringify({ bookId, seasonIndex, episodeIndex }),
     }).catch(() => {}), // fire-and-forget, 不阻塞播放
+
+  // 取消后台转码队列
+  cancelTranscode: () =>
+    request('/audio/transcode-cancel', { method: 'POST' }),
+
+  // 获取转码状态
+  getTranscodeStatus: () =>
+    request('/audio/transcode-status'),
 };
 
 // 配置相关API

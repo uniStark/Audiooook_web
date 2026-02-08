@@ -6,15 +6,20 @@ import {
   HiOutlineFolderOpen,
   HiOutlineCloud,
   HiOutlineFolder,
+  HiOutlinePlayCircle,
+  HiOutlineArrowDownTray,
   HiChevronRight,
+  HiChevronDown,
+  HiChevronUp,
   HiArrowUturnLeft,
   HiArrowPath,
   HiCheck,
   HiXMark,
 } from 'react-icons/hi2';
-import { configApi } from '../utils/api';
+import { configApi, bookApi } from '../utils/api';
 import useBookStore from '../stores/bookStore';
-import { getCacheSize, getAllCachedAudio, removeCachedAudio, setSetting, getSetting } from '../utils/db';
+import useDownloadStore from '../stores/downloadStore';
+import { getCacheSize, getAllCachedAudio, removeCachedAudio, getCachedAudioByBook, setSetting, getSetting } from '../utils/db';
 import { formatSize } from '../utils/format';
 
 export default function Settings() {
@@ -27,7 +32,13 @@ export default function Settings() {
   const [refreshing, setRefreshing] = useState(false);
   const [autoTranscode, setAutoTranscode] = useState(true);
   const [autoTranscodeCount, setAutoTranscodeCount] = useState(5);
+  const [resumeRewindSeconds, setResumeRewindSeconds] = useState(3);
+  // 下载管理
+  const [cachedBooks, setCachedBooks] = useState([]);
+  const [showCachedDetail, setShowCachedDetail] = useState(null);
+  const [deletingKeys, setDeletingKeys] = useState(new Set());
   const { fetchBooks } = useBookStore();
+  const { isDownloading: dlActive, tasks: dlTasks, completedCount: dlCompleted, totalCount: dlTotal, cancelDownload } = useDownloadStore();
 
   useEffect(() => {
     loadConfig();
@@ -58,11 +69,29 @@ export default function Settings() {
     const all = await getAllCachedAudio();
     setCacheSize(size);
     setCachedCount(all.length);
+    // 按书籍分组
+    const bookMap = {};
+    for (const item of all) {
+      const bid = item.bookId || 'unknown';
+      if (!bookMap[bid]) {
+        bookMap[bid] = {
+          bookId: bid,
+          bookName: item.bookName || bid,
+          episodes: [],
+          totalSize: 0,
+        };
+      }
+      bookMap[bid].episodes.push(item);
+      bookMap[bid].totalSize += item.size || 0;
+    }
+    setCachedBooks(Object.values(bookMap).sort((a, b) => b.totalSize - a.totalSize));
   };
 
   const loadLocalSettings = async () => {
     const limit = await getSetting('cacheLimitMB', 300);
     setCacheLimitMB(limit);
+    const rw = await getSetting('resumeRewindSeconds', 3);
+    setResumeRewindSeconds(rw);
   };
 
   const handleClearCache = async () => {
@@ -186,7 +215,13 @@ export default function Settings() {
                     onClick={async () => {
                       const newVal = !autoTranscode;
                       setAutoTranscode(newVal);
-                      try { await configApi.updateConfig({ autoTranscode: newVal }); } catch {}
+                      try {
+                        await configApi.updateConfig({ autoTranscode: newVal });
+                        // 关闭时立即取消后台转码队列
+                        if (!newVal) {
+                          await bookApi.cancelTranscode().catch(() => {});
+                        }
+                      } catch {}
                     }}
                     className={`relative w-11 h-6 rounded-full transition-colors ${
                       autoTranscode ? 'bg-primary-500' : 'bg-dark-600'
@@ -229,6 +264,89 @@ export default function Settings() {
             <p className="text-sm text-dark-500">加载中...</p>
           )}
         </div>
+
+        {/* 播放设置 */}
+        <div className="glass-card p-4">
+          <div className="flex items-center gap-3 mb-3">
+            <HiOutlinePlayCircle className="w-5 h-5 text-primary-500" />
+            <h2 className="font-semibold">播放设置</h2>
+          </div>
+          <div className="space-y-3 text-sm">
+            <div>
+              <div className="flex justify-between items-center mb-1.5">
+                <div>
+                  <span className="text-dark-300">继续播放回退</span>
+                  <p className="text-[10px] text-dark-500 mt-0.5">恢复播放时自动回退几秒</p>
+                </div>
+                <span className="text-primary-500 text-sm font-medium">{resumeRewindSeconds}秒</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="30"
+                step="1"
+                value={resumeRewindSeconds}
+                onChange={async (e) => {
+                  const val = parseInt(e.target.value) || 0;
+                  setResumeRewindSeconds(val);
+                  await setSetting('resumeRewindSeconds', val);
+                }}
+                className="w-full"
+              />
+              <div className="flex justify-between text-[10px] text-dark-600 mt-0.5">
+                <span>0秒</span>
+                <span>30秒</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 活跃下载进度 */}
+        {dlActive && dlTasks.length > 0 && (
+          <div className="glass-card p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-4 h-4 border-2 border-primary-500/30 border-t-primary-500 rounded-full animate-spin" />
+                <h2 className="font-semibold text-sm">正在下载</h2>
+              </div>
+              <button
+                onClick={cancelDownload}
+                className="text-xs text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 px-3 py-1.5 rounded-lg transition-all"
+              >
+                取消下载
+              </button>
+            </div>
+            <div className="mb-2">
+              <div className="flex justify-between text-xs mb-1">
+                <span className="text-dark-400">总进度 {dlCompleted}/{dlTotal}</span>
+                <span className="text-primary-500">{dlTotal > 0 ? Math.round((dlCompleted / dlTotal) * 100) : 0}%</span>
+              </div>
+              <div className="h-2 bg-dark-700 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary-500 rounded-full transition-all duration-300"
+                  style={{ width: `${dlTotal > 0 ? (dlCompleted / dlTotal) * 100 : 0}%` }}
+                />
+              </div>
+            </div>
+            {(() => {
+              const current = dlTasks.find(t => t.status === 'downloading');
+              return current ? (
+                <div className="text-[10px] text-dark-500">
+                  <div className="flex justify-between mb-0.5">
+                    <span className="truncate">{current.episodeName}</span>
+                    <span className="ml-2 flex-shrink-0">{current.progress}%</span>
+                  </div>
+                  <div className="h-1 bg-dark-700 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary-400/70 rounded-full transition-all duration-150"
+                      style={{ width: `${current.progress}%` }}
+                    />
+                  </div>
+                </div>
+              ) : null;
+            })()}
+          </div>
+        )}
 
         {/* 缓存管理 */}
         <div className="glass-card p-4">
@@ -287,6 +405,91 @@ export default function Settings() {
             </span>
           </button>
         </div>
+
+        {/* 下载管理 */}
+        {cachedBooks.length > 0 && (
+          <div className="glass-card p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-3">
+                <HiOutlineArrowDownTray className="w-5 h-5 text-primary-500" />
+                <h2 className="font-semibold">已下载内容</h2>
+              </div>
+              <span className="text-xs text-dark-400">{formatSize(cacheSize)}</span>
+            </div>
+            <div className="space-y-2">
+              {cachedBooks.map((cb) => (
+                <div key={cb.bookId} className="bg-dark-800/50 rounded-xl overflow-hidden">
+                  <div
+                    className="flex items-center justify-between px-3 py-2.5 cursor-pointer hover:bg-dark-700/50 transition-colors"
+                    onClick={() => setShowCachedDetail(showCachedDetail === cb.bookId ? null : cb.bookId)}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-dark-200 truncate">{cb.bookName}</p>
+                      <p className="text-[10px] text-dark-500 mt-0.5">{cb.episodes.length}集 · {formatSize(cb.totalSize)}</p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (!confirm(`确定删除「${cb.bookName}」的所有缓存？`)) return;
+                          for (const ep of cb.episodes) {
+                            await removeCachedAudio(ep.key);
+                          }
+                          await loadCacheInfo();
+                        }}
+                        className="text-red-400 hover:text-red-300 p-1.5 rounded-lg hover:bg-red-500/10 transition-colors"
+                        title="删除该书全部缓存"
+                      >
+                        <HiOutlineTrash className="w-4 h-4" />
+                      </button>
+                      {showCachedDetail === cb.bookId ? (
+                        <HiChevronUp className="w-4 h-4 text-dark-500" />
+                      ) : (
+                        <HiChevronDown className="w-4 h-4 text-dark-500" />
+                      )}
+                    </div>
+                  </div>
+                  {showCachedDetail === cb.bookId && (
+                    <div className="border-t border-dark-700/30 px-3 py-1 max-h-48 overflow-y-auto">
+                      {cb.episodes
+                        .sort((a, b) => (a.seasonName || '').localeCompare(b.seasonName || '') || (a.episodeName || '').localeCompare(b.episodeName || ''))
+                        .map((ep) => (
+                        <div key={ep.key} className="flex items-center justify-between py-1.5 text-xs border-b border-dark-700/20 last:border-b-0">
+                          <div className="flex-1 min-w-0">
+                            <span className="text-dark-300 truncate block">
+                              {ep.seasonName ? `${ep.seasonName} · ` : ''}{ep.episodeName || ep.key}
+                            </span>
+                            <span className="text-dark-500 text-[10px]">{formatSize(ep.size || 0)}</span>
+                          </div>
+                          <button
+                            disabled={deletingKeys.has(ep.key)}
+                            onClick={async () => {
+                              setDeletingKeys(prev => new Set(prev).add(ep.key));
+                              await removeCachedAudio(ep.key);
+                              await loadCacheInfo();
+                              setDeletingKeys(prev => {
+                                const s = new Set(prev);
+                                s.delete(ep.key);
+                                return s;
+                              });
+                            }}
+                            className="text-dark-500 hover:text-red-400 p-1 rounded transition-colors disabled:opacity-30 flex-shrink-0"
+                          >
+                            {deletingKeys.has(ep.key) ? (
+                              <div className="w-3.5 h-3.5 border border-dark-500 border-t-red-400 rounded-full animate-spin" />
+                            ) : (
+                              <HiXMark className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* 关于 */}
         <div className="glass-card p-4">
