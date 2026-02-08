@@ -7,10 +7,12 @@ services:
     ports:
       - "3001:4001"
     volumes:
-      # 将本地有声书目录挂载到容器中，请修改左侧路径为你的实际路径
-      - /nas/viedoBook/盗墓笔记｜南派三叔｜演播周建龙｜
-      # 持久化服务端数据（书籍元数据、用户配置、转码缓存等）
-      - audiooook_data:/app/server/data
+      # 有声书目录：请修改左侧为你的实际路径
+      - /path/to/your/audiobooks:/audiobooks
+
+      # 持久化服务端数据（配置、元数据、转码缓存、封面等）
+      # 数据目录映射到宿主机，可直接查看和编辑
+      - ./data:/app/server/data
     environment:
       - NODE_ENV=production
       - AUDIOBOOK_PATH=/audiobooks
@@ -22,6 +24,3 @@ services:
       # - OSS_BUCKET=your_bucket_name
       # - OSS_PREFIX=audiobooks/
     restart: unless-stopped
-
-volumes:
-  audiooook_data:

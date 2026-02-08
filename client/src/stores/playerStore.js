@@ -120,7 +120,7 @@ const usePlayerStore = create((set, get) => ({
     set({ isLoading: true, error: null });
     
     try {
-      // 获取完整书籍详情
+      // 获取完整书籍详情（始终从 API 刷新，确保 skipIntro/skipOutro 等元数据最新）
       let bookDetail = get().bookDetail;
       if (!bookDetail || bookDetail.id !== book.id) {
         const res = await bookApi.getBook(book.id);
@@ -147,19 +147,25 @@ const usePlayerStore = create((set, get) => ({
         audio.src = bookApi.getAudioUrl(book.id, season.id, episode.id);
       }
       
+      // 使用 bookDetail 的 skipIntro/skipOutro（始终最新），而非 book 参数（可能过时）
+      const skipIntro = bookDetail.skipIntro || 0;
+      const skipOutro = bookDetail.skipOutro || 0;
+      
       set({
         currentBook: book,
         currentSeason: season,
         currentEpisode: episode,
         currentSeasonIndex: seasonIndex,
         currentEpisodeIndex: episodeIndex,
-        skipIntro: book.skipIntro || 0,
-        skipOutro: book.skipOutro || 0,
+        skipIntro,
+        skipOutro,
         isPlaying: true,
       });
       
       audio.load();
       
+      // 如果有恢复进度，优先恢复到上次位置（不再跳过片头，因为用户已经听过了）
+      // 如果没有恢复进度但有跳过片头设置，会由 loadedmetadata 全局监听器处理
       if (seekTime > 0) {
         audio.addEventListener('loadedmetadata', function onLoaded() {
           audio.currentTime = seekTime;
@@ -178,6 +184,9 @@ const usePlayerStore = create((set, get) => ({
           artwork: [{ src: bookApi.getCoverUrl(book.id), sizes: '512x512', type: 'image/jpeg' }],
         });
       }
+
+      // 后台预转码接下来的几集（fire-and-forget，不阻塞播放）
+      bookApi.pretranscode(book.id, seasonIndex, episodeIndex);
     } catch (e) {
       console.error('Play error:', e);
       set({ error: e.message, isLoading: false });
@@ -297,6 +306,29 @@ const usePlayerStore = create((set, get) => ({
       currentTime,
       bookName: currentBook.name,
     });
+  },
+
+  // 使当前缓存的 bookDetail 失效（用于元数据更新后强制刷新）
+  invalidateBookDetail: async (bookId) => {
+    const { currentBook, bookDetail } = get();
+    // 如果正在播放的书就是被更新的书，重新获取 bookDetail
+    if (currentBook && currentBook.id === bookId) {
+      try {
+        const res = await bookApi.getBook(bookId);
+        const newDetail = res.data;
+        set({
+          bookDetail: newDetail,
+          skipIntro: newDetail.skipIntro || 0,
+          skipOutro: newDetail.skipOutro || 0,
+        });
+      } catch (e) {
+        // 如果获取失败，至少清除缓存让下次 playEpisode 重新获取
+        set({ bookDetail: null });
+      }
+    } else if (bookDetail && bookDetail.id === bookId) {
+      // 不在播放但缓存了这本书的详情，清除缓存
+      set({ bookDetail: null });
+    }
   },
 
   // 清除播放器状态

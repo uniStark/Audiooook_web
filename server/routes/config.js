@@ -4,8 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { isOSSConfigured, getOSSConfig } = require('../services/oss');
 const { getAudiobookPath, setAudiobookPath } = require('../services/scanner');
-
-const CONFIG_FILE = path.join(__dirname, '..', 'data', 'config.json');
+const { CONFIG_FILE } = require('../utils/paths');
 
 function loadConfig() {
   try {
@@ -31,6 +30,8 @@ function getDefaultConfig() {
     cacheSizeMB: 300,
     audiobookPath: getAudiobookPath(),
     ossEnabled: isOSSConfigured(),
+    autoTranscode: true,
+    autoTranscodeCount: 5,
   };
 }
 
@@ -57,10 +58,18 @@ router.get('/', (req, res) => {
 router.put('/', (req, res) => {
   try {
     const currentConfig = loadConfig();
-    const { cacheSizeMB, audiobookPath } = req.body;
+    const { cacheSizeMB, audiobookPath, autoTranscode, autoTranscodeCount } = req.body;
 
     if (cacheSizeMB !== undefined) {
       currentConfig.cacheSizeMB = Math.max(50, Math.min(5000, Number(cacheSizeMB)));
+    }
+
+    if (autoTranscode !== undefined) {
+      currentConfig.autoTranscode = !!autoTranscode;
+    }
+
+    if (autoTranscodeCount !== undefined) {
+      currentConfig.autoTranscodeCount = Math.max(1, Math.min(20, Number(autoTranscodeCount) || 5));
     }
 
     if (audiobookPath !== undefined) {
@@ -113,25 +122,48 @@ router.get('/browse', (req, res) => {
 
     // 读取子目录
     const entries = [];
+    // 系统/无用目录黑名单（仅在根目录下才跳过）
+    const isRootDir = resolved === path.parse(resolved).root || resolved === '/';
+    const ROOT_SKIP_DIRS = new Set([
+      'proc', 'sys', 'dev', 'run', 'snap',
+      '$Recycle.Bin', 'System Volume Information', 'Recovery', 'PerfLogs',
+    ]);
+    const ALWAYS_SKIP_DIRS = new Set(['node_modules']);
     try {
       const items = fs.readdirSync(resolved, { withFileTypes: true });
       for (const item of items) {
-        // 只列出目录，跳过隐藏目录和系统目录
-        if (!item.isDirectory()) continue;
         if (item.name.startsWith('.')) continue;
-        if (['node_modules', 'proc', 'sys', 'dev', '$Recycle.Bin', 'System Volume Information'].includes(item.name)) continue;
+        if (ALWAYS_SKIP_DIRS.has(item.name)) continue;
+        if (isRootDir && ROOT_SKIP_DIRS.has(item.name)) continue;
 
-        // 检查是否有读取权限
+        // 某些系统下 isDirectory() 可能异常
+        let isDir = false;
         const fullPath = path.join(resolved, item.name);
         try {
-          fs.accessSync(fullPath, fs.constants.R_OK);
-          entries.push({
-            name: item.name,
-            path: fullPath,
-          });
+          isDir = item.isDirectory();
+          if (!isDir) {
+            // 对于符号链接等，fallback 到 statSync
+            const stat = fs.statSync(fullPath);
+            isDir = stat.isDirectory();
+          }
         } catch {
-          // 无权限，跳过
+          continue;
         }
+        if (!isDir) continue;
+
+        // 检查是否有读取权限
+        let readable = true;
+        try {
+          fs.accessSync(fullPath, fs.constants.R_OK);
+        } catch {
+          readable = false;
+        }
+
+        entries.push({
+          name: item.name,
+          path: fullPath,
+          readable,
+        });
       }
     } catch (e) {
       return res.status(403).json({ success: false, error: '无法读取目录: ' + e.message });

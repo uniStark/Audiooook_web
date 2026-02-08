@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { 
   HiArrowLeft, HiPlay, HiHeart, HiOutlineHeart, 
   HiPencilSquare, HiArrowDownTray,
-  HiChevronDown, HiChevronUp
+  HiChevronDown, HiChevronUp, HiCamera
 } from 'react-icons/hi2';
 import { bookApi } from '../utils/api';
 import usePlayerStore from '../stores/playerStore';
@@ -16,7 +16,7 @@ import { formatTime } from '../utils/format';
 export default function BookDetail() {
   const { bookId } = useParams();
   const navigate = useNavigate();
-  const { playEpisode, resumeBook, currentBook } = usePlayerStore();
+  const { playEpisode, resumeBook, currentBook, invalidateBookDetail } = usePlayerStore();
   const { toggleFavorite, checkFavorite, favorites } = useBookStore();
   
   const [book, setBook] = useState(null);
@@ -28,6 +28,9 @@ export default function BookDetail() {
   const [metaForm, setMetaForm] = useState({});
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const coverInputRef = useRef(null);
+  const [coverKey, setCoverKey] = useState(0); // 用于强制刷新封面图片
 
   useEffect(() => {
     loadBook();
@@ -91,8 +94,43 @@ export default function BookDetail() {
       await bookApi.updateMetadata(bookId, metaForm);
       setShowMetaEdit(false);
       loadBook();
+      // 同步更新 playerStore 的 bookDetail，确保 skipIntro/skipOutro 实时生效
+      await invalidateBookDetail(bookId);
     } catch (e) {
       console.error('Failed to save metadata:', e);
+    }
+  };
+
+  // 上传封面
+  const handleCoverUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !book) return;
+    
+    // 验证文件类型
+    if (!file.type.startsWith('image/')) {
+      alert('请选择图片文件');
+      return;
+    }
+    // 限制大小 5MB
+    if (file.size > 5 * 1024 * 1024) {
+      alert('图片大小不能超过 5MB');
+      return;
+    }
+    
+    setUploading(true);
+    try {
+      const res = await bookApi.uploadCover(bookId, file);
+      if (res.success) {
+        // 强制刷新封面（浏览器缓存问题）
+        setCoverKey(prev => prev + 1);
+      }
+    } catch (e) {
+      console.error('Failed to upload cover:', e);
+      alert('封面上传失败');
+    } finally {
+      setUploading(false);
+      // 重置 input 以便再次选择同一文件
+      if (coverInputRef.current) coverInputRef.current.value = '';
     }
   };
 
@@ -172,11 +210,34 @@ export default function BookDetail() {
       {/* 书籍信息头部 */}
       <div className="glass-card p-4 mb-4">
         <div className="flex gap-4">
-          <div className="w-28 h-28 rounded-xl overflow-hidden flex-shrink-0 bg-dark-700">
+          <div
+            className="w-28 h-28 rounded-xl overflow-hidden flex-shrink-0 bg-dark-700 relative group cursor-pointer"
+            onClick={() => coverInputRef.current?.click()}
+          >
             <img
-              src={bookApi.getCoverUrl(book.id)}
+              src={`${bookApi.getCoverUrl(book.id)}${coverKey ? `?v=${coverKey}` : ''}`}
               alt={book.name}
               className="w-full h-full object-cover"
+            />
+            {/* 上传遮罩层 */}
+            <div className={`absolute inset-0 bg-black/50 flex flex-col items-center justify-center transition-opacity ${
+              uploading ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-active:opacity-100'
+            }`}>
+              {uploading ? (
+                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <>
+                  <HiCamera className="w-6 h-6 text-white/90" />
+                  <span className="text-[10px] text-white/70 mt-1">更换封面</span>
+                </>
+              )}
+            </div>
+            <input
+              ref={coverInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleCoverUpload}
+              className="hidden"
             />
           </div>
           <div className="flex-1 flex flex-col justify-between">

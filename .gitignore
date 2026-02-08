@@ -3,9 +3,14 @@ dist/
 .env
 *.log
 server/data/
+data/
 audiobooks/
 .DS_Store
 Thumbs.db
 .dev-pids/
 .dev-logs/
 docker-compose.override.yml
+
+# 运行时生成的配置文件（dev 环境在根目录）
+/config.json
+/metadata.json

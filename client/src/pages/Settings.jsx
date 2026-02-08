@@ -25,6 +25,8 @@ export default function Settings() {
   const [clearing, setClearing] = useState(false);
   const [showBrowser, setShowBrowser] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [autoTranscode, setAutoTranscode] = useState(true);
+  const [autoTranscodeCount, setAutoTranscodeCount] = useState(5);
   const { fetchBooks } = useBookStore();
 
   useEffect(() => {
@@ -39,6 +41,12 @@ export default function Settings() {
       setConfig(res.data);
       if (res.data.cacheSizeMB) {
         setCacheLimitMB(res.data.cacheSizeMB);
+      }
+      if (res.data.autoTranscode !== undefined) {
+        setAutoTranscode(res.data.autoTranscode);
+      }
+      if (res.data.autoTranscodeCount) {
+        setAutoTranscodeCount(res.data.autoTranscodeCount);
       }
     } catch (e) {
       console.error('Failed to load config:', e);
@@ -164,6 +172,58 @@ export default function Settings() {
                   {config.ossEnabled ? '已启用' : '未配置'}
                 </span>
               </div>
+
+              {/* 自动转码设置 */}
+              <div className="pt-2 border-t border-dark-700/30 space-y-3">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <span className="text-dark-300 text-sm">自动后台转码</span>
+                    <p className="text-[10px] text-dark-500 mt-0.5">
+                      WMA/FLAC/APE 等格式自动转为 MP3
+                    </p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      const newVal = !autoTranscode;
+                      setAutoTranscode(newVal);
+                      try { await configApi.updateConfig({ autoTranscode: newVal }); } catch {}
+                    }}
+                    className={`relative w-11 h-6 rounded-full transition-colors ${
+                      autoTranscode ? 'bg-primary-500' : 'bg-dark-600'
+                    }`}
+                  >
+                    <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                      autoTranscode ? 'translate-x-[22px]' : 'translate-x-0.5'
+                    }`} />
+                  </button>
+                </div>
+
+                {autoTranscode && (
+                  <div>
+                    <div className="flex justify-between items-center mb-1.5">
+                      <span className="text-dark-400 text-xs">预转码集数</span>
+                      <span className="text-primary-500 text-xs font-medium">{autoTranscodeCount} 集</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="1"
+                      max="20"
+                      step="1"
+                      value={autoTranscodeCount}
+                      onChange={async (e) => {
+                        const val = parseInt(e.target.value) || 5;
+                        setAutoTranscodeCount(val);
+                        try { await configApi.updateConfig({ autoTranscodeCount: val }); } catch {}
+                      }}
+                      className="w-full"
+                    />
+                    <div className="flex justify-between text-[10px] text-dark-600 mt-0.5">
+                      <span>1集</span>
+                      <span>20集</span>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           ) : (
             <p className="text-sm text-dark-500">加载中...</p>
@@ -283,14 +343,28 @@ function DirBrowser({ currentPath, onSelect, onClose }) {
         setInputPath(res.data.current);
       }
     } catch (e) {
-      setError('无法读取目录');
+      const msg = e?.error || e?.message || '无法读取目录';
+      setError(msg.includes('无法读取') || msg.includes('不存在') || msg.includes('不是目录')
+        ? msg
+        : '无法读取目录: ' + msg);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleGoTo = (path) => {
-    loadDir(path);
+  const handleGoTo = (entry) => {
+    // 如果传入的是对象（目录条目），检查权限
+    if (typeof entry === 'object') {
+      if (entry.readable === false) {
+        setError(`无权限访问: ${entry.name}`);
+        setTimeout(() => setError(''), 2000);
+        return;
+      }
+      loadDir(entry.path);
+    } else {
+      // 传入的是路径字符串（上级目录、盘符等）
+      loadDir(entry);
+    }
   };
 
   const handleInputGo = () => {
@@ -386,6 +460,10 @@ function DirBrowser({ currentPath, onSelect, onClose }) {
               ))}
             </div>
           )}
+          {/* 权限错误提示 */}
+          {error && !loading && entries.length > 0 && (
+            <span className="text-xs text-red-400 ml-auto">{error}</span>
+          )}
         </div>
 
         {/* 目录列表 */}
@@ -406,12 +484,26 @@ function DirBrowser({ currentPath, onSelect, onClose }) {
               {entries.map((entry) => (
                 <button
                   key={entry.path}
-                  onClick={() => handleGoTo(entry.path)}
-                  className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-dark-800 active:bg-dark-700 transition-colors"
+                  onClick={() => handleGoTo(entry)}
+                  className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${
+                    entry.readable === false
+                      ? 'opacity-40 cursor-not-allowed'
+                      : 'hover:bg-dark-800 active:bg-dark-700'
+                  }`}
                 >
-                  <HiOutlineFolder className="w-5 h-5 text-primary-500/70 flex-shrink-0" />
-                  <span className="text-sm text-dark-200 truncate flex-1">{entry.name}</span>
-                  <HiChevronRight className="w-4 h-4 text-dark-600 flex-shrink-0" />
+                  <HiOutlineFolder className={`w-5 h-5 flex-shrink-0 ${
+                    entry.readable === false ? 'text-dark-500' : 'text-primary-500/70'
+                  }`} />
+                  <span className={`text-sm truncate flex-1 ${
+                    entry.readable === false ? 'text-dark-500' : 'text-dark-200'
+                  }`}>
+                    {entry.name}
+                  </span>
+                  {entry.readable === false ? (
+                    <span className="text-[10px] text-dark-500 flex-shrink-0">无权限</span>
+                  ) : (
+                    <HiChevronRight className="w-4 h-4 text-dark-600 flex-shrink-0" />
+                  )}
                 </button>
               ))}
             </div>

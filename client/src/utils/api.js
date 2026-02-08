@@ -33,6 +33,15 @@ export const bookApi = {
     body: JSON.stringify(data),
   }),
   
+  // 上传自定义封面
+  uploadCover: (bookId, file) => {
+    return fetch(`${API_BASE}/books/${bookId}/cover`, {
+      method: 'POST',
+      headers: { 'Content-Type': file.type },
+      body: file,
+    }).then(res => res.json());
+  },
+  
   // 获取音频流URL
   getAudioUrl: (bookId, seasonId, episodeId) =>
     `${API_BASE}/audio/${bookId}/${seasonId}/${episodeId}`,
@@ -40,6 +49,13 @@ export const bookApi = {
   // 获取音频下载URL
   getDownloadUrl: (bookId, seasonId, episodeId) =>
     `${API_BASE}/audio/download/${bookId}/${seasonId}/${episodeId}`,
+
+  // 触发后台预转码（播放某集时预转码接下来的几集）
+  pretranscode: (bookId, seasonIndex, episodeIndex) =>
+    request('/audio/pretranscode', {
+      method: 'POST',
+      body: JSON.stringify({ bookId, seasonIndex, episodeIndex }),
+    }).catch(() => {}), // fire-and-forget, 不阻塞播放
 };
 
 // 配置相关API

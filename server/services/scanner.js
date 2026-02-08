@@ -15,8 +15,8 @@ const {
   needsTranscode 
 } = require('../utils/parser');
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const METADATA_FILE = path.join(DATA_DIR, 'metadata.json');
+const { CONFIG_FILE, METADATA_FILE, SERVER_DATA_DIR } = require('../utils/paths');
+const DATA_DIR = SERVER_DATA_DIR;
 
 // 运行时可动态修改的有声书路径
 let _customAudiobookPath = null;
@@ -29,10 +29,9 @@ function getAudiobookPath() {
   if (_customAudiobookPath) return _customAudiobookPath;
 
   // 尝试从配置文件读取
-  const configFile = path.join(DATA_DIR, 'config.json');
   try {
-    if (fs.existsSync(configFile)) {
-      const config = JSON.parse(fs.readFileSync(configFile, 'utf-8'));
+    if (fs.existsSync(CONFIG_FILE)) {
+      const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
       if (config.audiobookPath && fs.existsSync(config.audiobookPath)) {
         return config.audiobookPath;
       }

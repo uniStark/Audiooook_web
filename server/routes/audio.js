@@ -2,95 +2,13 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
 const { getBookDetail } = require('../services/scanner');
 const { needsTranscode, getExtension } = require('../utils/parser');
-
-// 转码缓存目录
-const TRANSCODE_CACHE_DIR = path.join(__dirname, '..', 'data', 'transcode-cache');
-if (!fs.existsSync(TRANSCODE_CACHE_DIR)) {
-  fs.mkdirSync(TRANSCODE_CACHE_DIR, { recursive: true });
-}
-
-// 正在转码中的文件（防止并发重复转码）
-const transcodingInProgress = new Map();
-
-/**
- * 获取转码缓存文件路径
- */
-function getTranscodeCachePath(bookId, seasonId, episodeId) {
-  return path.join(TRANSCODE_CACHE_DIR, `${bookId}_${seasonId}_${episodeId}.mp3`);
-}
-
-/**
- * 确保转码缓存文件存在（不存在则转码）
- * 返回缓存文件路径
- */
-async function ensureTranscoded(filePath, bookId, seasonId, episodeId) {
-  const cachePath = getTranscodeCachePath(bookId, seasonId, episodeId);
-  
-  // 已有缓存，直接返回
-  if (fs.existsSync(cachePath)) {
-    // 校验缓存文件大小是否合理（>1KB说明不是损坏文件）
-    const stat = fs.statSync(cachePath);
-    if (stat.size > 1024) {
-      return cachePath;
-    }
-    // 缓存文件损坏，删除后重新转码
-    fs.unlinkSync(cachePath);
-  }
-
-  // 检查是否正在转码中
-  const cacheKey = `${bookId}_${seasonId}_${episodeId}`;
-  if (transcodingInProgress.has(cacheKey)) {
-    // 等待正在进行的转码完成
-    return transcodingInProgress.get(cacheKey);
-  }
-
-  // 开始转码
-  const transcodePromise = new Promise((resolve, reject) => {
-    const { spawn } = require('child_process');
-    const tempPath = cachePath + '.tmp';
-
-    console.log(`[Transcode] 开始转码: ${path.basename(filePath)} -> MP3`);
-    const startTime = Date.now();
-
-    const ffmpeg = spawn('ffmpeg', [
-      '-i', filePath,
-      '-f', 'mp3',
-      '-ab', '128k',
-      '-ar', '44100',
-      '-ac', '2',
-      '-y',           // 覆盖已有文件
-      '-v', 'quiet',
-      tempPath,
-    ]);
-
-    ffmpeg.on('close', (code) => {
-      transcodingInProgress.delete(cacheKey);
-      if (code === 0 && fs.existsSync(tempPath)) {
-        // 转码成功，重命名为正式缓存文件
-        fs.renameSync(tempPath, cachePath);
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        console.log(`[Transcode] 转码完成 (${elapsed}s): ${path.basename(filePath)}`);
-        resolve(cachePath);
-      } else {
-        // 清理临时文件
-        try { fs.unlinkSync(tempPath); } catch {}
-        reject(new Error(`转码失败 (exit code: ${code})`));
-      }
-    });
-
-    ffmpeg.on('error', (err) => {
-      transcodingInProgress.delete(cacheKey);
-      try { fs.unlinkSync(tempPath); } catch {}
-      reject(err);
-    });
-  });
-
-  transcodingInProgress.set(cacheKey, transcodePromise);
-  return transcodePromise;
-}
+const {
+  ensureTranscoded,
+  preTranscodeFromPosition,
+  getTranscodeStatus,
+} = require('../services/transcoder');
 
 /**
  * 查找音频集的信息
@@ -109,6 +27,41 @@ function findEpisode(bookId, seasonId, episodeId) {
 
   return { book, season, episode };
 }
+
+/**
+ * POST /api/audio/pretranscode
+ * 触发后台预转码（播放某集时，预转码接下来 N 集）
+ * body: { bookId, seasonIndex, episodeIndex }
+ */
+router.post('/pretranscode', (req, res) => {
+  try {
+    const { bookId, seasonIndex, episodeIndex } = req.body;
+    if (!bookId || seasonIndex === undefined || episodeIndex === undefined) {
+      return res.status(400).json({ success: false, error: '参数不完整' });
+    }
+
+    const book = getBookDetail(bookId);
+    if (!book) {
+      return res.status(404).json({ success: false, error: '书籍不存在' });
+    }
+
+    // fire-and-forget：后台执行，不阻塞响应
+    preTranscodeFromPosition(book, seasonIndex, episodeIndex);
+
+    res.json({ success: true, message: '预转码已触发' });
+  } catch (e) {
+    console.error('Pretranscode error:', e);
+    res.status(500).json({ success: false, error: '触发预转码失败' });
+  }
+});
+
+/**
+ * GET /api/audio/transcode-status
+ * 查询后台转码队列状态
+ */
+router.get('/transcode-status', (req, res) => {
+  res.json({ success: true, data: getTranscodeStatus() });
+});
 
 /**
  * GET /api/audio/:bookId/:seasonId/:episodeId

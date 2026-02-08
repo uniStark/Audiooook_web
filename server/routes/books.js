@@ -6,8 +6,11 @@ const {
   scanAudiobooks, 
   getBookDetail, 
   getCoverPath, 
-  updateBookMetadata 
+  updateBookMetadata,
+  getBookMetadata,
 } = require('../services/scanner');
+const { preTranscodeBook, getTranscodeConfig } = require('../services/transcoder');
+const { COVERS_DIR } = require('../utils/paths');
 
 /**
  * GET /api/books
@@ -16,6 +19,20 @@ const {
 router.get('/', (req, res) => {
   try {
     const books = scanAudiobooks();
+
+    // 检测新书并触发后台预转码
+    const config = getTranscodeConfig();
+    if (config.autoTranscode) {
+      for (const book of books) {
+        const meta = getBookMetadata(book.id);
+        if (!meta._pretranscoded) {
+          // 新书：标记已触发预转码，然后后台执行
+          updateBookMetadata(book.id, { _pretranscoded: true });
+          preTranscodeBook(book);
+        }
+      }
+    }
+
     // 返回简化的书籍列表（不含完整的episodes数据）
     const bookList = books.map(book => ({
       id: book.id,
@@ -118,14 +135,18 @@ router.put('/:bookId/metadata', (req, res) => {
  */
 router.post('/:bookId/cover', express.raw({ type: 'image/*', limit: '5mb' }), (req, res) => {
   try {
-    const dataDir = path.join(__dirname, '..', 'data', 'covers');
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    
     const contentType = req.headers['content-type'] || 'image/jpeg';
-    const ext = contentType.split('/')[1] || 'jpg';
-    const coverFile = path.join(dataDir, `${req.params.bookId}.${ext}`);
+    const ext = contentType.split('/')[1] === 'jpeg' ? 'jpg' : (contentType.split('/')[1] || 'jpg');
+    const coverFile = path.join(COVERS_DIR, `${req.params.bookId}.${ext}`);
+    
+    // 清理旧的封面文件（可能是不同扩展名）
+    const imageExts = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'];
+    for (const oldExt of imageExts) {
+      const oldFile = path.join(COVERS_DIR, `${req.params.bookId}.${oldExt}`);
+      if (oldFile !== coverFile && fs.existsSync(oldFile)) {
+        try { fs.unlinkSync(oldFile); } catch { /* ignore */ }
+      }
+    }
     
     fs.writeFileSync(coverFile, req.body);
     updateBookMetadata(req.params.bookId, { customCover: coverFile });
