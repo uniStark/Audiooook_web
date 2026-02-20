@@ -47,7 +47,7 @@ export default function BookDetail() {
         const res = await bookApi.getConversionStatus(bookId);
         if (res.data) {
           setConversion(res.data);
-          if (res.data.status === 'done') {
+          if (res.data.status === 'done' || res.data.status === 'error') {
             loadBook();
           }
         } else {
@@ -358,30 +358,41 @@ export default function BookDetail() {
           <div className="flex items-center gap-2 mb-2">
             <div className="w-3.5 h-3.5 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
             <span className="text-xs text-dark-300">
-              正在转换格式 {conversion.completed}/{conversion.total}
+              正在转换格式 {conversion.completed + (conversion.failed || 0)}/{conversion.total}
+              {conversion.failed > 0 && <span className="text-red-400 ml-1">({conversion.failed} 失败)</span>}
             </span>
-            <span className="text-[10px] text-dark-500 ml-auto">
-              WMA/APE → M4A
-            </span>
+            <span className="text-[10px] text-dark-500 ml-auto">WMA/APE → M4A</span>
           </div>
           <div className="h-2 bg-dark-700 rounded-full overflow-hidden">
             <div
               className="h-full bg-amber-500 rounded-full transition-all duration-500"
-              style={{ width: `${conversion.total > 0 ? (conversion.completed / conversion.total) * 100 : 0}%` }}
+              style={{ width: `${conversion.total > 0 ? ((conversion.completed + (conversion.failed || 0)) / conversion.total) * 100 : 0}%` }}
             />
           </div>
           {conversion.currentFile && (
-            <p className="text-[10px] text-dark-500 mt-1.5 truncate">
-              {conversion.currentFile}
-            </p>
+            <p className="text-[10px] text-dark-500 mt-1.5 truncate">{conversion.currentFile}</p>
           )}
         </div>
       )}
-      {conversion && conversion.status === 'done' && conversion.failed > 0 && (
+      {conversion && (conversion.status === 'done' || conversion.status === 'error') && conversion.failed > 0 && (
         <div className="glass-card p-3 mb-4">
-          <p className="text-xs text-amber-400">
-            格式转换完成，{conversion.failed} 个文件转换失败
+          <p className="text-xs text-red-400 mb-1">
+            格式转换完成：{conversion.completed} 个成功，{conversion.failed} 个失败
           </p>
+          {conversion.failedFiles && conversion.failedFiles.length > 0 && (
+            <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
+              {conversion.failedFiles.map((f, i) => (
+                <p key={i} className="text-[10px] text-dark-500 truncate">
+                  ✗ {f.file}{f.error ? ` — ${f.error}` : ''}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {conversion && conversion.status === 'done' && conversion.failed === 0 && conversion.completed > 0 && (
+        <div className="glass-card p-3 mb-4">
+          <p className="text-xs text-green-400">格式转换完成 ✓ 共 {conversion.completed} 个文件</p>
         </div>
       )}
 

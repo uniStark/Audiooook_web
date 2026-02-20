@@ -20,8 +20,11 @@ const MAX_CONCURRENCY = 10;
 const CONVERT_EXTENSIONS = new Set(['.wma', '.ape']);
 
 // ========== 每本书的转换进度 ==========
-// bookId -> { total, completed, failed, currentFile, status: 'idle'|'converting'|'done'|'error' }
+// bookId -> { total, completed, failed, failedFiles, currentFile, status: 'idle'|'converting'|'done'|'error' }
 const bookProgress = new Map();
+
+// Permanently failed files — never retry these
+const permanentlyFailed = new Set();
 
 // 全局活跃 worker 数
 let activeWorkers = 0;
@@ -85,7 +88,6 @@ function convertFile(inputPath) {
     const outputPath = path.join(dir, `${baseName}.m4a`);
     const tempPath = outputPath + '.tmp';
 
-    // 如果目标文件已经存在（之前转换过但原文件未删除），直接删除原文件
     if (fs.existsSync(outputPath)) {
       try {
         const stat = fs.statSync(outputPath);
@@ -98,6 +100,7 @@ function convertFile(inputPath) {
     }
 
     const startTime = Date.now();
+    const stderrChunks = [];
 
     const ffmpeg = spawn('ffmpeg', [
       '-i', inputPath,
@@ -106,9 +109,11 @@ function convertFile(inputPath) {
       '-ar', '44100',
       '-ac', '1',
       '-y',
-      '-v', 'quiet',
+      '-v', 'error',
       tempPath,
     ]);
+
+    ffmpeg.stderr.on('data', (chunk) => stderrChunks.push(chunk));
 
     ffmpeg.on('close', (code) => {
       if (code === 0 && fs.existsSync(tempPath)) {
@@ -119,7 +124,6 @@ function convertFile(inputPath) {
             return reject(new Error('转换输出文件过小，可能失败'));
           }
           fs.renameSync(tempPath, outputPath);
-          // 删除原始文件
           fs.unlinkSync(inputPath);
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
           console.log(`[Converter] ✓ ${path.basename(inputPath)} → .m4a (${elapsed}s)`);
@@ -129,7 +133,9 @@ function convertFile(inputPath) {
         }
       } else {
         try { fs.unlinkSync(tempPath); } catch { /* ignore */ }
-        reject(new Error(`FFmpeg exit code: ${code}`));
+        const stderrStr = Buffer.concat(stderrChunks).toString().trim();
+        const detail = stderrStr ? stderrStr.split('\n').pop() : '';
+        reject(new Error(`FFmpeg exit code ${code}${detail ? ': ' + detail : ''}`));
       }
     });
 
@@ -168,13 +174,16 @@ function startBookConversion(book) {
   const existing = bookProgress.get(book.id);
   if (existing && existing.status === 'converting') return;
 
-  const files = collectFilesToConvert(book);
+  const allFiles = collectFilesToConvert(book);
+  // Filter out files that have permanently failed — no point retrying
+  const files = allFiles.filter(f => !permanentlyFailed.has(f));
   if (files.length === 0) return;
 
   const progress = {
     total: files.length,
     completed: 0,
     failed: 0,
+    failedFiles: [],
     currentFile: '',
     status: 'converting',
     startedAt: Date.now(),
@@ -218,6 +227,8 @@ async function runConversionQueue(bookId, files, progress) {
         progress.completed++;
       } catch (e) {
         progress.failed++;
+        progress.failedFiles.push({ file: path.basename(filePath), error: e.message });
+        permanentlyFailed.add(filePath);
         console.error(`[Converter] ✗ ${path.basename(filePath)}: ${e.message}`);
       }
     }

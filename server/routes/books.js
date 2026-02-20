@@ -43,9 +43,11 @@ router.get('/', (req, res) => {
         skipOutro: book.skipOutro,
         seasonCount: book.seasons.length,
         totalEpisodes: book.totalEpisodes,
-        converting: progress && progress.status === 'converting' ? {
+        converting: progress ? {
+          status: progress.status,
           total: progress.total,
           completed: progress.completed,
+          failed: progress.failed || 0,
         } : null,
       };
     });
@@ -93,7 +95,21 @@ router.get('/:bookId', (req, res) => {
  */
 router.get('/:bookId/conversion-status', (req, res) => {
   const progress = getConversionProgress(req.params.bookId);
-  res.json({ success: true, data: progress });
+  if (progress) {
+    res.json({
+      success: true,
+      data: {
+        status: progress.status,
+        total: progress.total,
+        completed: progress.completed,
+        failed: progress.failed || 0,
+        failedFiles: progress.failedFiles || [],
+        currentFile: progress.currentFile || '',
+      },
+    });
+  } else {
+    res.json({ success: true, data: null });
+  }
 });
 
 /**

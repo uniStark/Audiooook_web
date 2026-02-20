@@ -46,25 +46,30 @@ export default function BookCard({ book, progress, index = 0 }) {
         </div>
         
         {/* 格式转换进度 */}
-        {book.converting && (
+        {book.converting && book.converting.status === 'converting' && (
           <div className="mt-1">
             <div className="flex items-center gap-1.5">
               <div className="w-2.5 h-2.5 border border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
               <span className="text-[10px] text-amber-400">
-                转换中 {book.converting.completed}/{book.converting.total}
+                转换中 {book.converting.completed + (book.converting.failed || 0)}/{book.converting.total}
               </span>
             </div>
             <div className="h-1 bg-dark-700 rounded-full overflow-hidden mt-1">
               <div
                 className="h-full bg-amber-500 rounded-full transition-all duration-500"
-                style={{ width: `${book.converting.total > 0 ? (book.converting.completed / book.converting.total) * 100 : 0}%` }}
+                style={{ width: `${book.converting.total > 0 ? ((book.converting.completed + (book.converting.failed || 0)) / book.converting.total) * 100 : 0}%` }}
               />
             </div>
           </div>
         )}
+        {book.converting && book.converting.status === 'error' && (
+          <div className="mt-1">
+            <span className="text-[10px] text-red-400">转换失败 {book.converting.failed} 个文件</span>
+          </div>
+        )}
 
         {/* 播放进度 */}
-        {!book.converting && progress && (
+        {(!book.converting || book.converting.status === 'done' || book.converting.status === 'error') && progress && (
           <div className="mt-1">
             <p className="text-xs text-primary-500 truncate">
               {progress.seasonName && `${progress.seasonName} · `}
