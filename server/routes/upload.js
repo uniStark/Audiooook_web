@@ -3,16 +3,12 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 const { getAudiobookPath } = require('../services/scanner');
 const { needsConversion, convertFile } = require('../services/converter');
 const { isAudioFile } = require('../utils/parser');
-
-const TEMP_DIR = path.join(os.tmpdir(), 'audiooook_uploads');
-fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 const ARCHIVE_EXTS = new Set(['.zip', '.7z', '.rar']);
 
@@ -22,11 +18,12 @@ function isArchiveFile(filename) {
   return ARCHIVE_EXTS.has(path.extname(lower));
 }
 
-// All uploads go to a per-request temp directory first
+// Temp dir lives INSIDE the audiobook volume → same filesystem → rename works, no double space
 const storage = multer.diskStorage({
   destination(req, file, cb) {
     if (!req._tempDir) {
-      req._tempDir = path.join(TEMP_DIR, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+      const base = path.join(getAudiobookPath(), '.upload_tmp');
+      req._tempDir = path.join(base, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
       fs.mkdirSync(req._tempDir, { recursive: true });
     }
     cb(null, req._tempDir);
